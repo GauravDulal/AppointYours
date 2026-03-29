@@ -77,6 +77,13 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _init_sentry()
+    # Log DB host for diagnostic (mask password)
+    db_url = settings.DATABASE_URL
+    if "@" in db_url:
+        host_part = db_url.split("@")[1]
+        logger.info("Database target: %s", host_part)
+    else:
+        logger.info("Database URL format: %s", db_url[:30])
     from app.workers.scheduler import start_scheduler
     start_scheduler()
     logger.info("Application started [env=%s]", settings.ENVIRONMENT)
