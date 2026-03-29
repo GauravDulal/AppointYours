@@ -35,15 +35,28 @@ class Settings(BaseSettings):
     SMTP_PASSWORD: Optional[str] = None
     CLINIC_EMAIL: str = "notifications@dentist.com"
 
-    # AI
-    OPENAI_API_KEY: Optional[str] = None
+    # AI — Gemini (free) or OpenAI (paid)
+    GEMINI_API_KEY: Optional[str] = None
+    OPENAI_API_KEY: Optional[str] = None  # Fallback if Gemini not set
 
-    # Meta Webhooks
+    # Meta Platform — Facebook + Instagram
     META_VERIFY_TOKEN: Optional[str] = None
     META_APP_SECRET: Optional[str] = None
+    META_PAGE_ACCESS_TOKEN: Optional[str] = None
+    META_APP_ID: Optional[str] = None
+
+    # WhatsApp Cloud API
+    WHATSAPP_PHONE_NUMBER_ID: Optional[str] = None
+    WHATSAPP_ACCESS_TOKEN: Optional[str] = None
 
     # Sentry
     SENTRY_DSN: Optional[str] = None
+
+    # Simulator
+    SIMULATOR_ENABLED: bool = True  # Disable in production
+
+    # Rate limiting
+    RATE_LIMIT_PER_MINUTE: int = 60
 
     model_config = SettingsConfigDict(
         case_sensitive=True,
@@ -64,10 +77,12 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def warn_production_gaps(self) -> "Settings":
         if self.ENVIRONMENT == "production":
-            if not self.OPENAI_API_KEY:
-                logger.warning("OPENAI_API_KEY is not set — AI agent will use rule-based fallback.")
+            if not self.GEMINI_API_KEY and not self.OPENAI_API_KEY:
+                logger.warning("No AI API key set — agent will use rule-based fallback.")
             if not self.SENTRY_DSN:
                 logger.warning("SENTRY_DSN is not set — error tracking disabled.")
+            if not self.META_PAGE_ACCESS_TOKEN:
+                logger.warning("META_PAGE_ACCESS_TOKEN not set — cannot reply to social messages.")
         return self
 
     @property

@@ -1,11 +1,57 @@
 from typing import Any, List
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from app.api import deps
 from app.models.models import Conversation, Message, AdminUser, ConversationStatus
-from app.schemas.models import Conversation as ConversationSchema, Message as MessageSchema, MessageCreate
+from app.schemas.models import (
+    Conversation as ConversationSchema,
+    Message as MessageSchema,
+    MessageCreate,
+    ConversationSummaryStats,
+)
 
 router = APIRouter()
+
+
+# ---------------------------------------------------------------------------
+# Conversation summary stats for dashboard
+# ---------------------------------------------------------------------------
+@router.get("/summary", response_model=ConversationSummaryStats)
+def get_conversation_summary(
+    db: Session = Depends(deps.get_db),
+    current_user: AdminUser = Depends(deps.get_current_user),
+) -> Any:
+    active = db.query(Conversation).filter(Conversation.status == ConversationStatus.ACTIVE).count()
+    urgent = db.query(Conversation).filter(Conversation.urgency_flag == True).count()
+    resolved = db.query(Conversation).filter(Conversation.status == ConversationStatus.RESOLVED).count()
+    follow_up = db.query(Conversation).filter(Conversation.status == ConversationStatus.FOLLOW_UP).count()
+    return ConversationSummaryStats(
+        total_active=active,
+        total_urgent=urgent,
+        total_resolved=resolved,
+        total_follow_up=follow_up,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Recent conversations for dashboard
+# ---------------------------------------------------------------------------
+@router.get("/recent", response_model=List[ConversationSchema])
+def read_recent_conversations(
+    db: Session = Depends(deps.get_db),
+    limit: int = Query(5, le=20),
+    current_user: AdminUser = Depends(deps.get_current_user),
+) -> Any:
+    conversations = (
+        db.query(Conversation)
+        .filter(Conversation.status != ConversationStatus.RESOLVED)
+        .order_by(Conversation.updated_at.desc().nullslast(), Conversation.created_at.desc())
+        .limit(limit)
+        .all()
+    )
+    return conversations
+
 
 # ---------------------------------------------------------------------------
 # List all conversations (with optional filters)
@@ -21,7 +67,7 @@ def read_conversations(
     query = db.query(Conversation)
     if status:
         query = query.filter(Conversation.status == status)
-    conversations = query.order_by(Conversation.updated_at.desc()).offset(skip).limit(limit).all()
+    conversations = query.order_by(Conversation.updated_at.desc().nullslast()).offset(skip).limit(limit).all()
     return conversations
 
 
@@ -83,7 +129,7 @@ def create_message(
         content=message_in.content,
     )
     db.add(message)
-    conversation.updated_at = db.func.now() if hasattr(db.func, 'now') else None
+    conversation.updated_at = datetime.now(timezone.utc)
     db.commit()
     db.refresh(message)
     return message
@@ -135,4 +181,3 @@ def update_conversation_status(
     db.commit()
     db.refresh(conversation)
     return conversation
-

@@ -2,7 +2,7 @@
 Meta (Instagram / Facebook / WhatsApp) webhook receiver.
 
 Setup in Meta Developer Console:
-  - Callback URL: https://yourdomain.com/api/v1/webhooks/meta
+  - Callback URL: https://your-backend.onrender.com/api/v1/webhooks/meta
   - Verify Token:  same value as META_VERIFY_TOKEN in .env
   - Subscribe to:  messages, messaging_postbacks
 """
@@ -50,14 +50,14 @@ def _verify_signature(raw_body: bytes, x_hub_signature: str | None) -> bool:
         return True
     if not x_hub_signature:
         return False
-    expected = "sha256=" + hmac.new(
+    expected = "sha256=" + hmac.HMAC(
         settings.META_APP_SECRET.encode(), raw_body, hashlib.sha256
     ).hexdigest()
     return hmac.compare_digest(expected, x_hub_signature)
 
 
 # ---------------------------------------------------------------------------
-# Incoming message handler (POST)
+# Incoming message handler (POST) — handles all three channels
 # ---------------------------------------------------------------------------
 @router.post("")
 async def receive_webhook(
@@ -70,31 +70,51 @@ async def receive_webhook(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid signature")
 
     payload: dict[str, Any] = await request.json()
-    logger.info("Meta webhook received: object=%s", payload.get("object"))
+    obj = payload.get("object")
+    logger.info("Meta webhook received: object=%s", obj)
 
     for entry in payload.get("entry", []):
+        # -------------------------------------------------------------------
+        # Facebook Messenger — uses "messaging" array
+        # -------------------------------------------------------------------
         for messaging_event in entry.get("messaging", []):
-            await _handle_messaging_event(messaging_event, "facebook", db)
-        # Instagram uses "changes" structure
+            await _handle_facebook_event(messaging_event, db)
+
+        # -------------------------------------------------------------------
+        # Instagram + WhatsApp — use "changes" array
+        # -------------------------------------------------------------------
         for change in entry.get("changes", []):
-            if change.get("field") == "messages":
-                value = change.get("value", {})
+            field = change.get("field")
+            value = change.get("value", {})
+
+            if field == "messages" and obj == "instagram":
+                # Instagram messages
                 for msg in value.get("messages", []):
                     await _handle_instagram_message(msg, value, db)
+
+            elif field == "messages" and obj == "whatsapp_business_account":
+                # WhatsApp Cloud API messages
+                await _handle_whatsapp_messages(value, db)
 
     return {"status": "ok"}
 
 
-async def _handle_messaging_event(event: dict, channel: str, db: Session) -> None:
+# ---------------------------------------------------------------------------
+# Channel-specific handlers
+# ---------------------------------------------------------------------------
+
+async def _handle_facebook_event(event: dict, db: Session) -> None:
+    """Parse Facebook Messenger webhook event."""
     sender_id = event.get("sender", {}).get("id")
     message = event.get("message", {})
     text = message.get("text")
     if not sender_id or not text:
         return
-    await _process_inbound(channel=channel, external_user_id=sender_id, content=text, db=db)
+    await _process_inbound(channel="facebook", external_user_id=sender_id, content=text, db=db)
 
 
 async def _handle_instagram_message(msg: dict, value: dict, db: Session) -> None:
+    """Parse Instagram webhook message."""
     sender_id = msg.get("from", {}).get("id") or value.get("sender", {}).get("id")
     text = (msg.get("text") or "").strip()
     if not sender_id or not text:
@@ -102,6 +122,50 @@ async def _handle_instagram_message(msg: dict, value: dict, db: Session) -> None
     await _process_inbound(channel="instagram", external_user_id=sender_id, content=text, db=db)
 
 
+async def _handle_whatsapp_messages(value: dict, db: Session) -> None:
+    """Parse WhatsApp Cloud API webhook payload.
+
+    WhatsApp sends:
+    {
+      "messaging_product": "whatsapp",
+      "metadata": { "phone_number_id": "..." },
+      "contacts": [...],
+      "messages": [{
+        "from": "15551234567",
+        "type": "text",
+        "text": { "body": "Hello" },
+        "timestamp": "..."
+      }]
+    }
+    """
+    for msg in value.get("messages", []):
+        msg_type = msg.get("type")
+        sender_phone = msg.get("from")
+
+        if not sender_phone:
+            continue
+
+        # Handle text messages
+        if msg_type == "text":
+            text = msg.get("text", {}).get("body", "").strip()
+            if text:
+                await _process_inbound(channel="whatsapp", external_user_id=sender_phone, content=text, db=db)
+
+        # Handle interactive button replies
+        elif msg_type == "interactive":
+            interactive = msg.get("interactive", {})
+            button_reply = interactive.get("button_reply", {})
+            text = button_reply.get("title", "").strip()
+            if text:
+                await _process_inbound(channel="whatsapp", external_user_id=sender_phone, content=text, db=db)
+
+        else:
+            logger.info("Ignoring WhatsApp message type: %s from %s", msg_type, sender_phone)
+
+
+# ---------------------------------------------------------------------------
+# Shared inbound handler — find/create conversation, store message, trigger AI
+# ---------------------------------------------------------------------------
 async def _process_inbound(channel: str, external_user_id: str, content: str, db: Session) -> None:
     """Find-or-create conversation, store message, trigger AI agent."""
     conversation = db.query(Conversation).filter(

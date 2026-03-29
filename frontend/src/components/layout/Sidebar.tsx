@@ -2,19 +2,20 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { 
-  Home, 
-  MessageSquare, 
-  Calendar, 
-  Stethoscope, 
-  Clock, 
-  AlertCircle, 
+import {
+  Home,
+  MessageSquare,
+  Calendar,
+  Stethoscope,
+  Clock,
+  AlertCircle,
   BarChart3,
   LogOut,
-  Smartphone
+  Smartphone,
 } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { clearToken } from '@/lib/auth';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -35,12 +36,23 @@ export function Sidebar() {
   const pathname = usePathname();
 
   return (
-    <div className="flex h-screen w-64 flex-col border-r bg-white">
-      <div className="flex h-16 items-center border-b px-6">
-        <span className="text-xl font-bold text-blue-600">DentalFlow</span>
+    <div className="gradient-sidebar flex h-screen w-64 flex-col">
+      {/* Brand */}
+      <div className="flex h-16 items-center gap-3 border-b border-white/5 px-5">
+        <div className="gradient-primary flex h-8 w-8 items-center justify-center rounded-lg">
+          <Stethoscope className="h-4 w-4 text-white" />
+        </div>
+        <span className="text-lg font-bold tracking-tight text-white">
+          DentalFlow
+        </span>
       </div>
+
+      {/* Nav */}
       <div className="flex-1 overflow-y-auto py-4">
-        <nav className="space-y-1 px-3">
+        <p className="mb-2 px-5 text-[10px] font-semibold uppercase tracking-widest text-blue-200/30">
+          Menu
+        </p>
+        <nav className="space-y-0.5 px-3">
           {menuItems.map((item) => {
             const isActive = pathname === item.href;
             return (
@@ -48,29 +60,41 @@ export function Sidebar() {
                 key={item.name}
                 href={item.href}
                 className={cn(
-                  'flex items-center rounded-md px-3 py-2 text-sm font-medium transition-colors',
-                  isActive 
-                    ? 'bg-blue-50 text-blue-600' 
-                    : 'text-gray-700 hover:bg-gray-100'
+                  'group flex items-center rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-150',
+                  isActive
+                    ? 'bg-blue-600/20 text-white shadow-sm'
+                    : 'text-blue-100/50 hover:bg-white/5 hover:text-blue-100/80'
                 )}
               >
-                <item.icon className={cn('mr-3 h-5 w-5', isActive ? 'text-blue-600' : 'text-gray-400')} />
+                <item.icon
+                  className={cn(
+                    'mr-3 h-[18px] w-[18px] transition-colors',
+                    isActive
+                      ? 'text-blue-400'
+                      : 'text-blue-200/30 group-hover:text-blue-200/50'
+                  )}
+                />
                 {item.name}
+                {isActive && (
+                  <span className="ml-auto h-1.5 w-1.5 rounded-full bg-blue-400" />
+                )}
               </Link>
             );
           })}
         </nav>
       </div>
-      <div className="border-t p-4">
-        <button 
+
+      {/* Bottom */}
+      <div className="border-t border-white/5 p-3">
+        <button
           onClick={() => {
-            localStorage.removeItem('token');
+            clearToken();
             window.location.href = '/login';
           }}
-          className="flex w-full items-center rounded-md px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-100"
+          className="flex w-full items-center rounded-lg px-3 py-2.5 text-sm font-medium text-blue-100/40 transition-all hover:bg-white/5 hover:text-blue-100/70"
         >
-          <LogOut className="mr-3 h-5 w-5 text-gray-400" />
-          Logout
+          <LogOut className="mr-3 h-[18px] w-[18px]" />
+          Sign out
         </button>
       </div>
     </div>

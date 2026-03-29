@@ -1,8 +1,9 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Sidebar } from '@/components/layout/Sidebar';
+import { isAuthenticated } from '@/lib/auth';
 
 export default function DashboardLayout({
   children,
@@ -10,27 +11,34 @@ export default function DashboardLayout({
   children: React.ReactNode;
 }) {
   const router = useRouter();
-  const token = typeof window !== 'undefined' ? localStorage.getItem('token') : null;
+  const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    if (!token) {
+    if (!isAuthenticated()) {
       router.push('/login');
+    } else {
+      setReady(true);
     }
-  }, [router, token]);
+  }, [router]);
 
-  if (!token) {
+  if (!ready) {
     return (
-      <div className="flex h-screen items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-4 border-blue-600 border-t-transparent"></div>
+      <div className="flex h-screen items-center justify-center bg-slate-50">
+        <div className="flex flex-col items-center gap-3">
+          <div className="h-9 w-9 animate-spin rounded-full border-[3px] border-blue-600 border-t-transparent" />
+          <p className="text-sm text-slate-400">Loading dashboard…</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="flex h-screen bg-gray-50">
+    <div className="flex h-screen overflow-hidden bg-slate-50">
       <Sidebar />
-      <main className="flex-1 overflow-y-auto p-8">
-        {children}
+      <main className="flex-1 overflow-y-auto">
+        <div className="animate-fade-in p-6 lg:p-8">
+          {children}
+        </div>
       </main>
     </div>
   );

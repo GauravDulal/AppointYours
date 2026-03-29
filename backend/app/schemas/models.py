@@ -112,6 +112,33 @@ class Appointment(AppointmentBase):
     class Config:
         from_attributes = True
 
+class AppointmentEnriched(BaseModel):
+    """Appointment response with resolved patient/service names."""
+    id: int
+    patient_id: int
+    patient_name: str
+    service_id: int
+    service_name: str
+    start_at: datetime
+    end_at: datetime
+    status: AppointmentStatus
+    source_channel: str
+    booked_by_ai: bool
+    notes: Optional[str] = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+class AppointmentSummary(BaseModel):
+    """Appointment statistics summary."""
+    total: int
+    booked: int
+    completed: int
+    cancelled: int
+    completion_rate_pct: float
+    cancellation_rate_pct: float
+
 # Conversation
 class MessageBase(BaseModel):
     sender_type: MessageSenderType
@@ -150,6 +177,13 @@ class Conversation(ConversationBase):
 
     class Config:
         from_attributes = True
+
+class ConversationSummaryStats(BaseModel):
+    """Conversation statistics for the dashboard."""
+    total_active: int
+    total_urgent: int
+    total_resolved: int
+    total_follow_up: int
 
 # Clinic Settings
 class ClinicSettingsBase(BaseModel):

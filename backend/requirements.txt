@@ -12,6 +12,7 @@ bcrypt==4.0.1
 python-multipart
 apscheduler
 httpx
+google-genai
 openai
 python-dotenv
 sentry-sdk[fastapi]

@@ -6,6 +6,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.api.api import api_router
@@ -21,6 +24,12 @@ logging.basicConfig(
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Rate limiter
+# ---------------------------------------------------------------------------
+limiter = Limiter(key_func=get_remote_address, default_limits=[f"{settings.RATE_LIMIT_PER_MINUTE}/minute"])
 
 
 # ---------------------------------------------------------------------------
@@ -80,12 +89,16 @@ async def lifespan(app: FastAPI):
 # ---------------------------------------------------------------------------
 app = FastAPI(
     title=settings.PROJECT_NAME,
-    description="Backend for DentalFlow Social Booker",
+    description="Backend for DentalFlow Social Booker — Dental appointment booking via social media.",
     version="1.0.0",
     docs_url="/docs" if settings.ENVIRONMENT != "production" else None,
     redoc_url="/redoc" if settings.ENVIRONMENT != "production" else None,
     lifespan=lifespan,
 )
+
+# Rate limiter
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # CORS
 app.add_middleware(
@@ -101,14 +114,19 @@ app.add_middleware(RequestLoggingMiddleware)
 
 
 # ---------------------------------------------------------------------------
-# Global exception handler
+# Global exception handler — never leak stack traces in production
 # ---------------------------------------------------------------------------
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+
+    detail = "An internal server error occurred."
+    if settings.ENVIRONMENT == "development":
+        detail = f"{type(exc).__name__}: {exc}"
+
     return JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={"detail": "An internal server error occurred."},
+        content={"detail": detail},
     )
 
 
@@ -124,4 +142,3 @@ def health_check():
 # API router
 # ---------------------------------------------------------------------------
 app.include_router(api_router, prefix=settings.API_V1_STR)
-

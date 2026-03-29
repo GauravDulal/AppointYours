@@ -1,3 +1,8 @@
+"""
+AI Booking Agent — Handles inbound patient messages, generates replies using
+Google Gemini (free) or OpenAI (paid fallback), and sends them back via the
+appropriate social media provider.
+"""
 from sqlalchemy.orm import Session
 from app.models.models import (
     Conversation, Message, MessageSenderType,
@@ -7,12 +12,11 @@ from app.models.models import (
 from app.core.config import settings
 import datetime
 import logging
-import json
 
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# System prompt that instructs GPT how to behave as a dental booking assistant
+# System prompt that instructs the AI how to behave as a dental booking assistant
 # ---------------------------------------------------------------------------
 SYSTEM_PROMPT = """You are an AI booking assistant for a dental clinic.
 Your job is to help patients book appointments via social media messages.
@@ -51,7 +55,7 @@ class BookingAgent:
             conversation.detected_intent = "urgent_dental_issue"
             self.db.commit()
 
-        # Build context for GPT
+        # Build context
         services = self.db.query(Service).filter(Service.is_active == True).all()
         service_list = ", ".join(s.name for s in services) if services else "General Dentistry"
         slots = self._get_available_slots()
@@ -66,9 +70,10 @@ class BookingAgent:
         )
         history_reversed = list(reversed(history))
 
-        response = await self._call_gpt(content, history_reversed, service_list, slots)
+        # Generate AI response
+        response = await self._call_ai(content, history_reversed, service_list, slots)
 
-        # Detect intent from response keywords (lightweight heuristic post-GPT)
+        # Detect intent from response keywords
         response_lower = response.lower()
         if is_urgent:
             pass  # already set
@@ -93,16 +98,104 @@ class BookingAgent:
         self.db.add(assistant_msg)
         self.db.commit()
 
+        # ---------------------------------------------------------------
+        # SEND REPLY BACK TO PATIENT via the appropriate social provider
+        # ---------------------------------------------------------------
+        await self._send_reply(conversation, response)
+
         return response
 
-    async def _call_gpt(
+    async def _send_reply(self, conversation: Conversation, text: str) -> None:
+        """Send the AI reply back to the patient through their social media channel."""
+        channel = conversation.source_channel
+        recipient = conversation.external_user_id
+
+        try:
+            if channel in ("instagram", "facebook"):
+                from app.providers.meta_provider import MetaProvider
+                provider = MetaProvider(channel)
+                sent = await provider.send_message(recipient, text)
+            elif channel == "whatsapp":
+                from app.providers.whatsapp_provider import WhatsAppProvider
+                provider = WhatsAppProvider()
+                sent = await provider.send_message(recipient, text)
+            else:
+                # Simulator or unknown channel — don't send externally
+                logger.info("No external provider for channel '%s' — reply stored in DB only", channel)
+                return
+
+            if sent:
+                logger.info("Reply delivered via %s to %s", channel, recipient)
+            else:
+                logger.warning("Failed to deliver reply via %s to %s — stored in DB for manual follow-up", channel, recipient)
+
+        except Exception as exc:
+            logger.error("Provider error [%s → %s]: %s", channel, recipient, exc)
+
+    async def _call_ai(
         self, latest_message: str, history: list, service_list: str, slots: list
     ) -> str:
-        """Call OpenAI ChatCompletion. Falls back to rule-based response if API key missing."""
-        if not settings.OPENAI_API_KEY:
-            logger.warning("OPENAI_API_KEY not set — using rule-based fallback")
+        """Call Gemini (free) or OpenAI (paid fallback). Falls back to rules if neither is set."""
+
+        # Priority 1: Google Gemini (free)
+        if settings.GEMINI_API_KEY:
+            return await self._call_gemini(latest_message, history, service_list, slots)
+
+        # Priority 2: OpenAI (paid)
+        if settings.OPENAI_API_KEY:
+            return await self._call_openai(latest_message, history, service_list, slots)
+
+        # Priority 3: Rule-based fallback (no API key needed)
+        logger.warning("No AI API key set — using rule-based fallback")
+        return self._rule_based_fallback(latest_message, service_list, slots)
+
+    async def _call_gemini(
+        self, latest_message: str, history: list, service_list: str, slots: list
+    ) -> str:
+        """Call Google Gemini API (free tier: 15 RPM, 1500 RPD)."""
+        try:
+            from google import genai
+
+            client = genai.Client(api_key=settings.GEMINI_API_KEY)
+
+            slot_strings = [s.strftime("%A %d %b, %I:%M %p") for s in slots[:6]]
+            system = SYSTEM_PROMPT.format(
+                services=service_list,
+                slots=", ".join(slot_strings),
+            )
+
+            # Build conversation contents
+            contents = []
+            for msg in history:
+                role = "user" if msg.sender_type == MessageSenderType.PATIENT else "model"
+                contents.append({"role": role, "parts": [{"text": msg.content}]})
+
+            # Append latest if not already at end
+            if not history or history[-1].content != latest_message:
+                contents.append({"role": "user", "parts": [{"text": latest_message}]})
+
+            response = client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=contents,
+                config={
+                    "system_instruction": system,
+                    "max_output_tokens": 256,
+                    "temperature": 0.4,
+                },
+            )
+            return response.text.strip()
+
+        except Exception as exc:
+            logger.error("Gemini call failed: %s", exc)
+            # Try OpenAI as fallback
+            if settings.OPENAI_API_KEY:
+                return await self._call_openai(latest_message, history, service_list, slots)
             return self._rule_based_fallback(latest_message, service_list, slots)
 
+    async def _call_openai(
+        self, latest_message: str, history: list, service_list: str, slots: list
+    ) -> str:
+        """Call OpenAI ChatCompletion (paid fallback)."""
         try:
             from openai import AsyncOpenAI
             client = AsyncOpenAI(api_key=settings.OPENAI_API_KEY)
@@ -117,8 +210,6 @@ class BookingAgent:
             for msg in history:
                 role = "user" if msg.sender_type == MessageSenderType.PATIENT else "assistant"
                 messages.append({"role": role, "content": msg.content})
-            # Latest message already in history from simulator endpoint — avoid duplication
-            # Only append if not already the last message
             if not history or history[-1].content != latest_message:
                 messages.append({"role": "user", "content": latest_message})
 
@@ -131,11 +222,11 @@ class BookingAgent:
             return completion.choices[0].message.content.strip()
 
         except Exception as exc:
-            logger.error(f"OpenAI call failed: {exc}")
+            logger.error("OpenAI call failed: %s", exc)
             return self._rule_based_fallback(latest_message, service_list, slots)
 
     def _rule_based_fallback(self, content: str, service_list: str, slots: list) -> str:
-        """Deterministic fallback used when OpenAI is unavailable."""
+        """Deterministic fallback used when no AI API is available."""
         content_lower = content.lower()
         if any(kw in content_lower for kw in URGENT_KEYWORDS):
             return (

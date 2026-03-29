@@ -4,8 +4,8 @@ from .models import (
     Service, ServiceCreate,
     AvailabilityRule, AvailabilityRuleCreate,
     BlockedDate, BlockedDateCreate,
-    Appointment, AppointmentCreate,
+    Appointment, AppointmentCreate, AppointmentEnriched, AppointmentSummary,
     Message, MessageCreate,
-    Conversation, ConversationCreate,
+    Conversation, ConversationCreate, ConversationSummaryStats,
     ClinicSettings, ClinicSettingsCreate
 )
